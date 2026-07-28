@@ -18,6 +18,7 @@ interface PlayerState {
   queue:             Song[];
   queueVisible:      boolean;
   categoryPool:      Song[];
+  recentSongIds:     string[]; // last few played — keeps next-song picks out of tight loops
 
   // ✅ Crossfade state
   preloadedSong:     Song | null;
@@ -65,22 +66,45 @@ function loadCrossfadePref(): boolean {
   }
 }
 
+// How many of the top-scored candidates to randomize among when picking the
+// next song. Always taking #1 sounds "smart" but two or three songs that
+// mutually out-score everything else for each other (identical tag sets)
+// turns into a permanent ping-pong loop between them — this breaks that
+// while staying within the genre-matched top of the pool.
+const NEXT_SONG_RANDOM_WINDOW = 5;
+const RECENT_HISTORY_LIMIT    = 6;
+
 // Shared "what would play next" logic — used by both the hard-cut playNext()
 // and peekNext() (read-only, so the crossfade engine can preload it early).
 function computeNext(state: PlayerState): { song: Song; fromQueue: boolean } | null {
   if (state.queue.length > 0) return { song: state.queue[0], fromQueue: true };
 
-  const { currentSong, categoryPool } = state;
+  const { currentSong, categoryPool, recentSongIds } = state;
   if (categoryPool.length > 0 && currentSong) {
     const idx = categoryPool.findIndex(s => s.id === currentSong.id);
-    // Smart-queue pools deliberately exclude the seed song, so idx is -1
-    // there — the top-scored recommendation (index 0) IS the next song.
-    // A raw, non-scored pool (before the smart queue kicks in) still has
-    // the seed in it, so advance sequentially instead.
-    const next = idx === -1 ? categoryPool[0] : categoryPool[(idx + 1) % categoryPool.length];
-    if (next && next.id !== currentSong.id) return { song: next, fromQueue: false };
+
+    if (idx === -1) {
+      // Smart-queue pools deliberately exclude the seed song — pick randomly
+      // among the top few matches instead of always #1, and prefer one that
+      // hasn't played recently so a tight mutual-top-pick pair can't loop.
+      const window = categoryPool.slice(0, NEXT_SONG_RANDOM_WINDOW);
+      const fresh  = window.filter(s => !recentSongIds.includes(s.id));
+      const pool   = fresh.length > 0 ? fresh : window;
+      const next   = pool[Math.floor(Math.random() * pool.length)];
+      if (next) return { song: next, fromQueue: false };
+    } else {
+      // A raw, non-scored pool (before the smart queue kicks in) still has
+      // the seed in it — advance sequentially instead.
+      const next = categoryPool[(idx + 1) % categoryPool.length];
+      if (next && next.id !== currentSong.id) return { song: next, fromQueue: false };
+    }
   }
   return null;
+}
+
+function pushRecent(recentSongIds: string[], id: string | undefined): string[] {
+  if (!id) return recentSongIds;
+  return [id, ...recentSongIds.filter(x => x !== id)].slice(0, RECENT_HISTORY_LIMIT);
 }
 
 // ── Write to Firestore history (for usePersonalizedFeed) ──
@@ -125,6 +149,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   queue:             [],
   queueVisible:      false,
   categoryPool:      [],
+  recentSongIds:     [],
   seekFn:            null,
   preloadedSong:     null,
   crossfadeProgress: 0,
@@ -140,6 +165,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       categoryPool:      pool ?? s.categoryPool,
       preloadedSong:     null,
       crossfadeProgress: 0,
+      recentSongIds:     pushRecent(s.recentSongIds, s.currentSong?.id),
     }));
     // ✅ Write to Firestore history so personalized feed learns taste
     if (userId) void writeHistory(userId, song);
@@ -184,6 +210,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       queue:             next.fromQueue ? s.queue.slice(1) : s.queue,
       preloadedSong:     null,
       crossfadeProgress: 0,
+      recentSongIds:     pushRecent(s.recentSongIds, s.currentSong?.id),
     }));
   },
 
@@ -201,13 +228,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   // Advance currentSong after crossfade WITHOUT reloading the video
   setCurrentSongSilent: (song, userId) => {
-    set({
+    set(s => ({
       currentSong:       song,
       currentTime:       0,
       preloadedSong:     null,
       crossfadeProgress: 0,
+      recentSongIds:     pushRecent(s.recentSongIds, s.currentSong?.id),
       // status stays 'playing' — video already running
-    });
+    }));
     // ✅ Also track crossfade-advanced songs in history
     if (userId) void writeHistory(userId, song);
   },
@@ -221,6 +249,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       preloadedSong:     null,
       crossfadeProgress: 0,
       queue:             s.queue[0]?.id === song.id ? s.queue.slice(1) : s.queue,
+      recentSongIds:     pushRecent(s.recentSongIds, s.currentSong?.id),
     }));
     if (userId) void writeHistory(userId, song);
   },

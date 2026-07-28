@@ -3,27 +3,11 @@ import { getAdminDb } from '../api/_lib/firebaseAdmin.ts';
 import { searchVideoIds, videoDetails, parseIsoDuration } from '../api/_lib/youtube.ts';
 import { cleanTitle } from '../src/lib/cleanTitle.ts';
 import { isCompilationTitle } from '../api/_lib/titleFilters.ts';
+import { PRIORITY_ARTISTS } from '../api/_lib/priorityArtists.ts';
 
 const MAX_TRACK_SECONDS = 12 * 60;
 const FIRESTORE_BATCH_LIMIT = 400;
-const QUOTA_BUDGET = 3000; // stay safely under today's remaining YouTube quota
-
-// ── Round 2 — different angles (decades/moods/languages) so results don't
-// just re-fetch what round 1 already pulled in ──
-const GENRE_QUERY_VARIANTS: Record<string, string[]> = {
-  lofi:       ['lofi sad songs', 'lofi sleep music songs', 'lofi jazz hop songs'],
-  classical:  ['sitar instrumental music', 'flute instrumental relaxing music', 'violin instrumental hits'],
-  jazz:       ['jazz piano songs', 'bossa nova jazz songs', 'jazz vocal classics'],
-  edm:        ['edm 2010s hits', 'progressive house hits', 'edm workout songs'],
-  devotional: ['krishna bhajan songs', 'shiv bhajan songs', 'gurbani shabad songs'],
-  sufi:       ['sufi rock songs', 'coke studio sufi songs'],
-  rock:       ['90s rock hits', '2000s rock hits', 'indie rock anthems'],
-  pop:        ['2010s pop hits', '90s pop hits', 'k-pop hits'],
-  hiphop:     ['2010s hip hop hits', 'desi hip hop songs', 'r&b hits'],
-  bollywood:  ['bollywood sad songs', '90s bollywood songs', 'bollywood dance songs'],
-  punjabi:    ['punjabi sad songs', 'punjabi rap songs'],
-  indie:      ['indie acoustic songs', 'indie electronic songs'],
-};
+const RESULTS_PER_ARTIST = 50; // pulls deep into each artist's catalog, not just their top hit
 
 async function main() {
   const apiKey = process.env.YOUTUBE_API_KEY;
@@ -43,26 +27,21 @@ async function main() {
   };
 
   let quotaUsed = 0;
-
-  searchLoop:
-  for (const [genreId, queries] of Object.entries(GENRE_QUERY_VARIANTS)) {
-    for (const q of queries) {
-      if (quotaUsed + 100 > QUOTA_BUDGET) break searchLoop;
-      try {
-        const ids = await searchVideoIds(apiKey, q, { maxResults: 50 });
-        quotaUsed += 100;
-        ids.forEach(id => addCandidate(id, genreId));
-        console.log(`[${genreId}] "${q}" -> ${ids.length} results (quota used: ${quotaUsed})`);
-      } catch (err) {
-        console.error(`  search failed for "${q}":`, err instanceof Error ? err.message : err);
-      }
+  for (const { artist, genreId } of PRIORITY_ARTISTS) {
+    try {
+      const ids = await searchVideoIds(apiKey, artist, { maxResults: RESULTS_PER_ARTIST });
+      quotaUsed += 100;
+      ids.forEach(id => addCandidate(id, genreId));
+      console.log(`[${artist}] -> ${ids.length} results (quota used: ${quotaUsed})`);
+    } catch (err) {
+      console.error(`  search failed for "${artist}":`, err instanceof Error ? err.message : err);
     }
   }
 
   const newIds = [...candidateGenres.keys()].filter(id => !existingIds.has(id));
-  console.log(`\nTotal candidates: ${candidateGenres.size} | new (not already in library): ${newIds.length}`);
+  console.log(`\nTotal candidates: ${candidateGenres.size} | new: ${newIds.length}`);
 
-  console.log('Fetching video details (duration/thumbnail)...');
+  console.log('Fetching video details...');
   const details = await videoDetails(apiKey, newIds);
 
   let batch = db.batch();
@@ -70,7 +49,6 @@ async function main() {
   let added = 0;
   let skippedDuration = 0;
   let skippedTitle = 0;
-  const byGenre: Record<string, number> = {};
 
   for (const video of details) {
     const durationSec = parseIsoDuration(video.contentDetails.duration);
@@ -98,7 +76,6 @@ async function main() {
     });
 
     added++;
-    genreIds.forEach(g => { byGenre[g] = (byGenre[g] ?? 0) + 1; });
     opsInBatch++;
 
     if (opsInBatch === FIRESTORE_BATCH_LIMIT) {
@@ -110,11 +87,10 @@ async function main() {
   }
   if (opsInBatch > 0) await batch.commit();
 
-  console.log('\n=== DONE (round 2) ===');
+  console.log('\n=== DONE ===');
   console.log('Added:', added);
-  console.log('Skipped (too long/live/no duration):', skippedDuration);
-  console.log('Skipped (compilation-style title):', skippedTitle);
-  console.log('By genre:', byGenre);
+  console.log('Skipped (too long/live):', skippedDuration);
+  console.log('Skipped (compilation title):', skippedTitle);
   console.log('Approx YouTube quota used:', quotaUsed);
 }
 

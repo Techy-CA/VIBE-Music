@@ -2,6 +2,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '../api/_lib/firebaseAdmin.ts';
 import { searchVideoIds, videoDetails, parseIsoDuration } from '../api/_lib/youtube.ts';
 import { cleanTitle } from '../src/lib/cleanTitle.ts';
+import { isCompilationTitle } from '../api/_lib/titleFilters.ts';
 
 const MAX_TRACK_SECONDS = 12 * 60; // skip mixes/full albums/streams
 const FIRESTORE_BATCH_LIMIT = 400;
@@ -103,11 +104,13 @@ async function main() {
   let opsInBatch = 0;
   let added = 0;
   let skippedDuration = 0;
+  let skippedTitle = 0;
   const byGenre: Record<string, number> = {};
 
   for (const video of details) {
     const durationSec = parseIsoDuration(video.contentDetails.duration);
     if (durationSec === 0 || durationSec > MAX_TRACK_SECONDS) { skippedDuration++; continue; }
+    if (isCompilationTitle(video.snippet.title)) { skippedTitle++; continue; }
 
     const genreIds = [...(candidateGenres.get(video.id) ?? [])];
     const thumbnail =
@@ -145,6 +148,7 @@ async function main() {
   console.log('\n=== DONE ===');
   console.log('Added:', added);
   console.log('Skipped (too long/live/no duration):', skippedDuration);
+  console.log('Skipped (compilation-style title):', skippedTitle);
   console.log('By genre:', byGenre);
   console.log('Approx YouTube quota used:', quotaUsed);
 }

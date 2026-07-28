@@ -4,7 +4,9 @@ import { getAdminDb } from './_lib/firebaseAdmin';
 import { searchVideoIds, playlistVideoIds, videoDetails, parseIsoDuration } from './_lib/youtube';
 import { GENRE_QUERY_POOL, GENRE_RECENCY_SEED } from './_lib/genreQueries';
 import { CURATED_PLAYLISTS } from './_lib/curatedPlaylists';
+import { PRIORITY_ARTISTS } from './_lib/priorityArtists';
 import { cleanTitle } from '../src/lib/cleanTitle';
+import { isCompilationTitle } from './_lib/titleFilters';
 
 const MAX_TRACK_SECONDS     = 12 * 60; // skip mixes/full albums/streams
 const FIRESTORE_BATCH_LIMIT = 400;
@@ -67,7 +69,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let quotaUsed = 0;
     const searchesRun: string[] = [];
 
-    // 1. Freshness pass — one recency-ordered query per genre, every run.
+    // 1. Priority artists — always searched first, before anything else gets
+    //    a shot at the quota budget.
+    await Promise.all(
+      PRIORITY_ARTISTS.map(async ({ artist, genreId }) => {
+        try {
+          const ids = await searchVideoIds(apiKey, artist, { maxResults: RESULTS_PER_QUERY });
+          ids.forEach(id => addCandidate(id, genreId));
+          searchesRun.push(`[artist:${genreId}] "${artist}" -> ${ids.length}`);
+        } catch (err) {
+          console.error(`[ingest-songs] priority artist search failed for "${artist}":`, err);
+        }
+      }),
+    );
+    quotaUsed += PRIORITY_ARTISTS.length * 100;
+
+    // 2. Freshness pass — one recency-ordered query per genre, every run.
     const publishedAfter = new Date(Date.now() - RECENCY_LOOKBACK_MS).toISOString();
     await Promise.all(
       Object.entries(GENRE_RECENCY_SEED).map(async ([genreId, query]) => {
@@ -86,7 +103,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
     quotaUsed += Object.keys(GENRE_RECENCY_SEED).length * 100;
 
-    // 2. Discovery pass — rotate through the big query pool with whatever
+    // 3. Discovery pass — rotate through the big query pool with whatever
     //    quota is left, so the whole pool cycles over multiple days.
     const remainingBudget = QUOTA_BUDGET - quotaUsed;
     const poolCallsToday  = Math.max(0, Math.floor(remainingBudget / 100));
@@ -103,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // 3. Curated playlists, if configured — cheap regardless of size.
+    // 4. Curated playlists, if configured — cheap regardless of size.
     await Promise.all(
       CURATED_PLAYLISTS.map(async ({ genreId, playlistId }) => {
         try {
@@ -115,7 +132,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }),
     );
 
-    // 4. Drop anything already in the library.
+    // 5. Drop anything already in the library.
     const existingSnap = await db.collection('songs').select('videoId').get();
     const existingIds  = new Set(existingSnap.docs.map(d => d.data().videoId as string));
     const newIds = [...candidateGenres.keys()].filter(id => !existingIds.has(id));
@@ -125,17 +142,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    // 5. Fetch full details, filter out non-tracks, write to Firestore.
+    // 6. Fetch full details, filter out non-tracks and compilation-style
+    //    titles ("Best Songs of 2024", "Nonstop Hits"), write to Firestore.
     const details = await videoDetails(apiKey, newIds);
 
-    let batch       = db.batch();
-    let opsInBatch  = 0;
-    let added       = 0;
+    let batch        = db.batch();
+    let opsInBatch   = 0;
+    let added        = 0;
+    let skippedTitle = 0;
     const byGenre: Record<string, number> = {};
 
     for (const video of details) {
       const durationSec = parseIsoDuration(video.contentDetails.duration);
       if (durationSec === 0 || durationSec > MAX_TRACK_SECONDS) continue;
+      if (isCompilationTitle(video.snippet.title)) { skippedTitle++; continue; }
 
       const genreIds = [...(candidateGenres.get(video.id) ?? [])];
       const thumbnail =
@@ -169,7 +189,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (opsInBatch > 0) await batch.commit();
 
-    res.status(200).json({ added, byGenre, scanned: newIds.length, quotaUsed, searchesRun });
+    res.status(200).json({ added, skippedTitle, byGenre, scanned: newIds.length, quotaUsed, searchesRun });
   } catch (err) {
     console.error('[ingest-songs] failed:', err);
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
