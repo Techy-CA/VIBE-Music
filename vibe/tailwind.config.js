@@ -4,7 +4,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans:    ['Inter', 'system-ui', 'sans-serif'],
+        display: ['"Space Grotesk"', 'Inter', 'system-ui', 'sans-serif'],
       },
       animation: {
         'spin-slow': 'spin 8s linear infinite',

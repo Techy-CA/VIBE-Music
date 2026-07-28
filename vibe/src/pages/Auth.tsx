@@ -6,6 +6,55 @@ import { Button } from '../components/ui/Button';
 import { Input  } from '../components/ui/Input';
 import { useAuth } from '../hooks/useAuth';
 
+// ── Copy per tab — keeps the right panel feeling alive on switch ──
+const COPY = {
+  login: {
+    eyebrow: 'WELCOME BACK',
+    title:   "Let's get you back in.",
+    sub:     'Sign in to pick up right where the playlist left off.',
+    cta:     'Sign In',
+  },
+  register: {
+    eyebrow: 'CREATE ACCOUNT',
+    title:   'Set up your account.',
+    sub:     'Add your first track and start building your library.',
+    cta:     'Create Account',
+  },
+} as const;
+
+const authErrorMessage = (err: unknown, fallback: string): string => {
+  const raw = err instanceof Error ? err.message : '';
+  return raw.replace('Firebase: ', '').replace(/\(auth.*\)\.?/, '').trim() || fallback;
+};
+
+// ── Underline tab toggle — no pill, no fill ─────────────────
+const TabSwitcher = ({ tab, onChange }: {
+  tab: 'login' | 'register';
+  onChange: (t: 'login' | 'register') => void;
+}) => (
+  <div className="flex gap-6 border-b border-white/10">
+    {(['login', 'register'] as const).map(t => (
+      <button
+        key={t}
+        type="button"
+        onClick={() => onChange(t)}
+        className={`relative pb-3 text-sm font-semibold transition-colors duration-150 cursor-pointer ${
+          tab === t ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'
+        }`}
+      >
+        {t === 'login' ? 'Sign In' : 'Sign Up'}
+        {tab === t && (
+          <motion.div
+            layoutId="auth-tab-underline"
+            className="absolute left-0 right-0 -bottom-px h-[2px] bg-indigo-500"
+            transition={{ type: 'spring', stiffness: 500, damping: 40 }}
+          />
+        )}
+      </button>
+    ))}
+  </div>
+);
+
 export default function Auth() {
   const [tab,      setTab     ] = useState<'login' | 'register'>('login');
   const [name,     setName    ] = useState('');
@@ -17,6 +66,7 @@ export default function Auth() {
 
   const { loginWithEmail, registerWithEmail, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
+  const copy = COPY[tab];
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -25,55 +75,108 @@ export default function Auth() {
       if (tab === 'login') await loginWithEmail(email, password);
       else                 await registerWithEmail(email, password, name);
       navigate('/');
-    } catch (err: any) {
-      setError(
-        err.message?.replace('Firebase: ', '').replace(/\(auth.*\)\.?/, '').trim()
-        || 'Something went wrong'
-      );
+    } catch (err) {
+      setError(authErrorMessage(err, 'Something went wrong'));
     } finally { setLoading(false); }
   };
 
   const handleGoogle = async () => {
     setError(''); setLoading(true);
     try   { await loginWithGoogle(); navigate('/'); }
-    catch (err: any) { setError(err.message || 'Google sign-in failed'); }
+    catch (err) { setError(authErrorMessage(err, 'Google sign-in failed')); }
     finally { setLoading(false); }
   };
 
   return (
-    <div className="min-h-screen bg-[#08080e] flex items-center justify-center p-4 relative overflow-hidden">
-      <div className="absolute top-1/4 left-1/4 w-80 h-80 rounded-full bg-purple-600/8 blur-3xl pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-64 h-64 rounded-full bg-pink-500/8 blur-3xl pointer-events-none" />
+    <div className="h-[100dvh] w-full overflow-y-auto lg:overflow-hidden bg-[#0a0a0c] flex flex-col lg:flex-row">
 
-      <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md relative">
-        <div className="bg-[#111120]/80 backdrop-blur-2xl border border-white/8 rounded-3xl p-8 shadow-2xl shadow-black/60">
-          {/* Logo */}
-          <div className="flex flex-col items-center mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-600 to-pink-500 flex items-center justify-center shadow-lg shadow-purple-900/50 mb-4">
-              <Music2 className="w-7 h-7 text-white" />
-            </div>
-            <h1 className="text-2xl font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-              Vibe
-            </h1>
-            <p className="text-slate-500 text-sm mt-1">Share music. Discover sounds.</p>
+      {/* ══════════════════ Left — brand stage (desktop only) ══════════════════ */}
+      <div
+        className="hidden lg:flex lg:w-[48%] xl:w-[44%] relative flex-col justify-between p-14 overflow-hidden border-r border-white/10"
+        style={{
+          backgroundImage:
+            'linear-gradient(to right, rgba(255,255,255,0.035) 1px, transparent 1px), ' +
+            'linear-gradient(to bottom, rgba(255,255,255,0.035) 1px, transparent 1px)',
+          backgroundSize: '42px 42px',
+        }}
+      >
+        {/* Brand row */}
+        <div className="relative z-10 flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+            <Music2 className="w-4 h-4 text-white" />
           </div>
+          <span className="font-display font-semibold text-base text-white tracking-tight">Zuno</span>
+        </div>
 
-          {/* Tabs */}
-          <div className="flex bg-white/5 rounded-xl p-1 mb-6">
-            {(['login', 'register'] as const).map(t => (
-              <button key={t} onClick={() => { setTab(t); setError(''); }}
-                className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all duration-200 ${
-                  tab === t
-                    ? 'bg-purple-600 text-white shadow-lg shadow-purple-900/40'
-                    : 'text-slate-500 hover:text-slate-100'
-                }`}>
-                {t === 'login' ? 'Sign In' : 'Sign Up'}
-              </button>
+        {/* Headline */}
+        <div className="relative z-10 max-w-md">
+          <h1 className="font-display font-semibold text-4xl xl:text-[2.75rem] leading-[1.12] tracking-tight text-white">
+            Your next favorite song is one tap away.
+          </h1>
+          <p className="mt-4 text-zinc-500 text-[15px] leading-relaxed">
+            Every song, every playlist — streamed without a single ad.
+          </p>
+
+          <div className="mt-10 border-t border-white/10 pt-8">
+            <p className="text-xs font-semibold tracking-widest text-indigo-400 uppercase">Why Zuno</p>
+            <p className="mt-3 text-zinc-200 text-xl font-display font-semibold leading-snug">
+              No ads. No interruptions.<br />Just the music.
+            </p>
+          </div>
+        </div>
+
+        {/* Footer — minimal equalizer signal */}
+        <div className="relative z-10 flex items-center justify-between">
+          <span className="text-[11px] text-zinc-600 font-medium tracking-widest uppercase">Zuno / 2026</span>
+          <div className="flex items-end gap-[3px]">
+            {[8, 13, 10, 16, 11].map((h, i) => (
+              <motion.div
+                key={i}
+                className="w-[3px] rounded-sm bg-indigo-500/70"
+                animate={{ height: [h, h + 6, h - 2, h + 4, h] }}
+                transition={{ repeat: Infinity, duration: 1 + i * 0.06, delay: i * 0.08, ease: 'easeInOut' }}
+                initial={{ height: h }}
+              />
             ))}
           </div>
+        </div>
+      </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+      {/* ══════════════════ Right — auth form ══════════════════ */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-10">
+        <div className="w-full max-w-[380px]">
+
+          {/* Compact brand mark — mobile only */}
+          <div className="lg:hidden flex items-center gap-2.5 mb-10">
+            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+              <Music2 className="w-4 h-4 text-white" />
+            </div>
+            <span className="font-display font-semibold text-base text-white tracking-tight">Zuno</span>
+          </div>
+
+          {/* Contextual heading */}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={tab}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.18 }}
+              className="mb-7"
+            >
+              <span className="text-xs font-semibold tracking-widest text-indigo-400 uppercase">
+                {copy.eyebrow}
+              </span>
+              <h2 className="font-display font-semibold text-2xl text-white tracking-tight mt-1.5">
+                {copy.title}
+              </h2>
+              <p className="text-zinc-500 text-sm mt-2">{copy.sub}</p>
+            </motion.div>
+          </AnimatePresence>
+
+          <TabSwitcher tab={tab} onChange={t => { setTab(t); setError(''); }} />
+
+          <form onSubmit={handleSubmit} className="space-y-4 mt-6">
             <AnimatePresence>
               {tab === 'register' && (
                 <motion.div key="name"
@@ -82,6 +185,7 @@ export default function Auth() {
                   exit={{ opacity: 0, height: 0 }}>
                   <Input label="Display Name" placeholder="Your name" value={name}
                     onChange={e => setName(e.target.value)}
+                    className="rounded-lg h-11"
                     leftIcon={<User className="w-4 h-4" />} required />
                 </motion.div>
               )}
@@ -89,37 +193,40 @@ export default function Auth() {
 
             <Input label="Email" type="email" placeholder="you@example.com" value={email}
               onChange={e => setEmail(e.target.value)}
+              className="rounded-lg h-11"
               leftIcon={<Mail className="w-4 h-4" />} required />
 
             <Input label="Password" type={showPass ? 'text' : 'password'}
               placeholder="••••••••" value={password}
               onChange={e => setPassword(e.target.value)}
+              className="rounded-lg h-11"
               leftIcon={<Lock className="w-4 h-4" />}
               rightIcon={
-                <button type="button" onClick={() => setShowPass(!showPass)}>
+                <button type="button" onClick={() => setShowPass(!showPass)} className="cursor-pointer">
                   {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               } required />
 
             {error && (
               <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
+                className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3.5 py-2.5">
                 {error}
               </motion.p>
             )}
 
-            <Button type="submit" className="w-full" size="lg" isLoading={loading}>
-              {tab === 'login' ? 'Sign In' : 'Create Account'}
+            <Button type="submit" className="w-full rounded-xl bg-none bg-indigo-600 hover:bg-indigo-500 shadow-none"
+              size="lg" isLoading={loading}>
+              {copy.cta}
             </Button>
           </form>
 
           <div className="flex items-center gap-3 my-5">
-            <div className="flex-1 h-px bg-white/7" />
-            <span className="text-xs text-slate-600">or</span>
-            <div className="flex-1 h-px bg-white/7" />
+            <div className="flex-1 h-px bg-white/10" />
+            <span className="text-xs text-zinc-600">or continue with</span>
+            <div className="flex-1 h-px bg-white/10" />
           </div>
 
-          <Button variant="glass" className="w-full" size="lg"
+          <Button variant="glass" className="w-full rounded-xl" size="lg"
             onClick={handleGoogle} isLoading={loading}
             leftIcon={
               <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -132,7 +239,7 @@ export default function Auth() {
             Continue with Google
           </Button>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 }
