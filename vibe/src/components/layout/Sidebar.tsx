@@ -5,7 +5,7 @@ import { Home, PlusCircle, User, LogOut, ListMusic, Plus, X, Music2 } from 'luci
 import { cn }          from '../../utils/cn';
 import { Avatar }      from '../ui/Avatar';
 import { useAuth }     from '../../hooks/useAuth';
-import { usePlaylist } from '../../hooks/usePlaylist';
+import { usePlaylists } from '../../hooks/usePlaylist';
 
 const NavItem = ({ to, icon: Icon, label }: {
   to: string; icon: React.ElementType; label: string;
@@ -64,14 +64,14 @@ const PlaylistRow = ({ playlist }: { playlist: any }) => (
 
 export const Sidebar = () => {
   const { user, signOutUser }    = useAuth();
-  const { playlists, createNew } = usePlaylist();
+  const { playlists, createPlaylist } = usePlaylists();
   const [creating, setCreating]  = useState(false);
   const [newName,  setNewName]   = useState('');
   const navigate = useNavigate();
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
-    await createNew(newName);
+    await createPlaylist(newName);
     setNewName('');
     setCreating(false);
   };

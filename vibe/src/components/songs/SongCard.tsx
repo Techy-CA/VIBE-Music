@@ -1,11 +1,11 @@
-import { useState, useRef, type JSXElementConstructor, type Key, type ReactElement, type ReactNode, type ReactPortal } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Play, Heart, Plus, MoreVertical, ListPlus, Trash2 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { usePlayerStore }  from '../../store/usePlayerStore';
 import { useLikes }        from '../../hooks/useLikes';
 import { useAuthStore }    from '../../store/useAuthStore';
-import { usePlaylist }     from '../../hooks/usePlaylist';
+import { usePlaylists }    from '../../hooks/usePlaylist';
 import type { Song } from '../../types';
 
 export const SongCard = ({ song, index = 0, onDelete }: {
@@ -18,7 +18,7 @@ export const SongCard = ({ song, index = 0, onDelete }: {
   const { currentSong, play, addToQueue, status } = usePlayerStore();
   const { likedIds, handleToggle, pendingIds }    = useLikes();
   const user      = useAuthStore(s => s.user);
-  const { playlists, addToPlaylist } = usePlaylist();
+  const { playlists, addSongToPlaylist } = usePlaylists();
 
   const isCurrentlyPlaying = currentSong?.id === song.id && status === 'playing';
   const isActive  = currentSong?.id === song.id;
@@ -127,9 +127,9 @@ export const SongCard = ({ song, index = 0, onDelete }: {
                         {playlists.length === 0 ? (
                           <p className="text-xs text-slate-500 px-4 py-3">No playlists yet</p>
                         ) : (
-                          playlists.map((pl: { id: Key | null | undefined; name: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<string | number | bigint | boolean | ReactPortal | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | null | undefined> | null | undefined; }) => (
+                          playlists.map(pl => (
                             <button key={pl.id}
-                              onClick={() => { addToPlaylist(pl.id, song.id, song.thumbnail); setMenuOpen(false); }}
+                              onClick={() => { addSongToPlaylist(pl.id, song.id); setMenuOpen(false); }}
                               className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/5 transition-colors"
                             >
                               <div className="w-6 h-6 rounded bg-purple-600/30 flex items-center justify-center text-[10px]">🎵</div>

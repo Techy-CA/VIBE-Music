@@ -20,7 +20,7 @@ export const useAuth = () => {
             id:       firebaseUser.uid,
             name:     firebaseUser.displayName || 'Music Fan',
             email:    firebaseUser.email ?? '',
-            photoURL: firebaseUser.photoURL,
+            photoURL: firebaseUser.photoURL ?? undefined,
           });
           profile = await getUserProfile(firebaseUser.uid);
         }
@@ -42,7 +42,7 @@ export const useAuth = () => {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(cred.user, { displayName: name });
     await createUserProfile(cred.user.uid, {
-      id: cred.user.uid, name, email, photoURL: null,
+      id: cred.user.uid, name, email,
     });
   };
 

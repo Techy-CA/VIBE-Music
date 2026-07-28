@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { Song } from '../types';
 
 const KEY = 'zuno_recently_played';

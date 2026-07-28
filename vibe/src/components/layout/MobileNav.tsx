@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Home, PlusCircle, User, ListMusic } from 'lucide-react';
+import { Home, PlusCircle, User } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { usePlayerStore } from '../../store/usePlayerStore';
 

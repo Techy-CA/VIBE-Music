@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import {
-  doc, updateDoc, deleteDoc, collection, addDoc, serverTimestamp,
+  doc, updateDoc, deleteDoc, serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuthStore } from '../store/useAuthStore';

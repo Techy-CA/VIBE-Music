@@ -1,5 +1,5 @@
 // src/components/player/QueuePanel.tsx
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { X, ListMusic, Trash2, GripVertical, ListPlus, Shuffle, Timer, Music2 } from 'lucide-react';
