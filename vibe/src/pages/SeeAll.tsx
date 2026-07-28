@@ -45,7 +45,7 @@ const SongCard = ({ song, index, onPlay }: {
       )}
     >
       <div className="relative aspect-square overflow-hidden">
-        <img src={song.thumbnail} alt={song.title}
+        <img src={song.thumbnail} alt={song.title} loading="lazy" decoding="async"
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
         <div className={cn(
           'absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity duration-200',

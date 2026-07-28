@@ -44,6 +44,7 @@ export const SongCard = ({ song, index = 0, onDelete }: {
       <div className="relative aspect-video overflow-hidden">
         <img
           src={thumbnail} alt={song.title}
+          loading="lazy" decoding="async"
           onError={() => setImgError(true)}
           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
         />

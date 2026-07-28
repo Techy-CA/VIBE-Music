@@ -4,7 +4,7 @@ import { Search, X, Heart, SlidersHorizontal, Check, ListPlus } from 'lucide-rea
 import { usePlayerStore }    from '../store/usePlayerStore';
 import { useAuthStore }      from '../store/useAuthStore';
 import { useLikes }          from '../hooks/useLikes';
-import { useAllSongs }       from '../hooks/useSongs';
+import { useAllSongs, useGenreCounts } from '../hooks/useSongs';
 import { useRecentlyPlayed } from '../hooks/useRecentlyPlayed';
 import { GENRES }            from '../types';
 import { cn }                from '../utils/cn';
@@ -67,7 +67,7 @@ const SearchRow = ({ song, pool, onPlay }: { song: Song; pool: Song[]; onPlay: (
     >
       {/* Thumbnail */}
       <div className="relative flex-shrink-0">
-        <img src={song.thumbnail} alt={song.title}
+        <img src={song.thumbnail} alt={song.title} loading="lazy" decoding="async"
           className={cn('w-10 h-10 rounded-lg object-cover', isActive && 'ring-1 ring-violet-500/60')} />
         {isPlaying && (
           <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/50">
@@ -170,6 +170,7 @@ const GenreCard = ({
 // ── Page ───────────────────────────────────────────────────
 export default function SearchPage() {
   const { songs, isLoading } = useAllSongs();
+  const { counts: genreCounts } = useGenreCounts();
   const { play, setCategoryPool } = usePlayerStore();
   const { addRecent }        = useRecentlyPlayed();
 
@@ -195,16 +196,6 @@ export default function SearchPage() {
 
   const toggleGenre = (id: string) =>
     setSelGenres(prev => prev.includes(id) ? prev.filter(g => g !== id) : [...prev, id]);
-
-  const genreCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    songs.forEach(song => {
-      (song.tags ?? []).forEach(tag => {
-        counts[tag] = (counts[tag] ?? 0) + 1;
-      });
-    });
-    return counts;
-  }, [songs]);
 
   const results = useMemo(() => {
     return songs

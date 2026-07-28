@@ -8,7 +8,7 @@ import {
 import { usePlayerStore }        from '../store/usePlayerStore';
 import { useAuthStore }          from '../store/useAuthStore';
 import { useLikes }              from '../hooks/useLikes';
-import { useSongFeed, useAllSongs } from '../hooks/useSongs';
+import { useSongFeed, useAllSongs, useGenreCounts } from '../hooks/useSongs';
 import { useRecentlyPlayed }     from '../hooks/useRecentlyPlayed';
 import { usePersonalizedFeed }   from '../hooks/usePersonalizedFeed'; // ✅ NEW
 import { shuffle }               from '../utils/shuffle';
@@ -74,7 +74,7 @@ const MiniCard = ({ song, index, onPlay, pool, onAddToPlaylist }: {
         'relative aspect-square rounded-xl overflow-hidden bg-zinc-800',
         isActive && 'ring-2 ring-violet-500/50',
       )}>
-        <img src={song.thumbnail} alt={song.title} draggable={false}
+        <img src={song.thumbnail} alt={song.title} draggable={false} loading="lazy" decoding="async"
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 pointer-events-none" />
         <div className="absolute inset-0 bg-black/10 group-hover:bg-black/0 transition-colors pointer-events-none" />
         <div className={cn(
@@ -148,7 +148,7 @@ const QuickRow = ({ song, onPlay, pool, onAddToPlaylist }: {
         isActive ? 'bg-white/7 border-white/8' : 'hover:bg-white/4 active:bg-white/6 border-transparent',
       )}
     >
-      <img src={song.thumbnail} alt={song.title} draggable={false}
+      <img src={song.thumbnail} alt={song.title} draggable={false} loading="lazy" decoding="async"
         className={cn('w-10 h-10 rounded-lg object-cover flex-shrink-0 pointer-events-none',
           isActive && 'ring-1 ring-violet-500/50')} />
       <div className="flex-1 min-w-0 pointer-events-none">
@@ -251,7 +251,7 @@ const FeaturedCard = ({ song, onPlay, pool, isPersonalized }: {
       style={{ aspectRatio: '21/9', WebkitTapHighlightColor: 'transparent' }}
       className="relative rounded-2xl overflow-hidden cursor-pointer group select-none"
     >
-      <img src={song.thumbnail} alt={song.title} draggable={false}
+      <img src={song.thumbnail} alt={song.title} draggable={false} loading="lazy" decoding="async"
         className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.02] pointer-events-none" />
       <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent pointer-events-none" />
       <div className="absolute inset-0 bg-gradient-to-r from-black/40 to-transparent pointer-events-none" />
@@ -382,7 +382,7 @@ const GenreSongsView = ({ genreId, songs, onPlay, onBack, onAddToPlaylist }: {
                 )}
               >
                 <div className="relative aspect-square overflow-hidden">
-                  <img src={song.thumbnail} alt={song.title} draggable={false}
+                  <img src={song.thumbnail} alt={song.title} draggable={false} loading="lazy" decoding="async"
                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 pointer-events-none" />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
                     <div className="w-9 h-9 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center">
@@ -453,6 +453,7 @@ const QuickPlaySkeleton = () => (
 export default function Home() {
   const { songs, isLoading, isLoadingMore, hasMore, loadMore } = useSongFeed();
   const { songs: allSongs }   = useAllSongs();
+  const { counts: genreCounts } = useGenreCounts();
   const { likedIds }          = useLikes();
   const user                  = useAuthStore(s => s.user);
   const play                  = usePlayerStore(s => s.play);
@@ -523,13 +524,6 @@ export default function Home() {
     ? personalizedQuick
     : shuffle(songs, 5005).slice(0, 6);
   const quickLoading    = isLoading || personalizedLoading;
-
-  // ✅ Genre counts from allSongs
-  const genreCounts = useMemo(() => {
-    const map: Record<string, number> = {};
-    allSongs.forEach(s => s.tags?.forEach(t => { map[t] = (map[t] ?? 0) + 1; }));
-    return map;
-  }, [allSongs]);
 
   return (
     <div className="pb-32 lg:pb-12">
