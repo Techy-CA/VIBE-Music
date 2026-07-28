@@ -34,6 +34,7 @@ interface PlayerState {
   setCurrentTime:   (t: number) => void;
   setDuration:      (d: number) => void;
   playNext:         () => void;
+  peekNext:         () => Song | null;
   addToQueue:       (song: Song) => void;
   removeFromQueue:  (id: string) => void;
   clearQueue:       () => void;
@@ -47,7 +48,26 @@ interface PlayerState {
   setPreloadedSong:     (song: Song | null) => void;
   setCrossfadeProgress: (n: number) => void;
   setCurrentSongSilent: (song: Song, userId?: string) => void;
+  advanceToNext:        (song: Song, userId?: string) => void;
   dequeueFirst:         () => void;
+}
+
+// Shared "what would play next" logic — used by both the hard-cut playNext()
+// and peekNext() (read-only, so the crossfade engine can preload it early).
+function computeNext(state: PlayerState): { song: Song; fromQueue: boolean } | null {
+  if (state.queue.length > 0) return { song: state.queue[0], fromQueue: true };
+
+  const { currentSong, categoryPool } = state;
+  if (categoryPool.length > 0 && currentSong) {
+    const idx = categoryPool.findIndex(s => s.id === currentSong.id);
+    // Smart-queue pools deliberately exclude the seed song, so idx is -1
+    // there — the top-scored recommendation (index 0) IS the next song.
+    // A raw, non-scored pool (before the smart queue kicks in) still has
+    // the seed in it, so advance sequentially instead.
+    const next = idx === -1 ? categoryPool[0] : categoryPool[(idx + 1) % categoryPool.length];
+    if (next && next.id !== currentSong.id) return { song: next, fromQueue: false };
+  }
+  return null;
 }
 
 // ── Write to Firestore history (for usePersonalizedFeed) ──
@@ -138,43 +158,24 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   clearQueue: () => set({ queue: [] }),
 
-  // ── playNext (manual skip — bypasses crossfade) ───────
+  // ── playNext (manual skip / natural end — hard cut) ───
   playNext: () => {
-    const { queue, currentSong, categoryPool } = get();
-
-    if (queue.length > 0) {
-      const [next, ...rest] = queue;
-      set({
-        currentSong:       next,
-        status:            'loading',
-        currentTime:       0,
-        duration:          0,
-        queue:             rest,
-        preloadedSong:     null,
-        crossfadeProgress: 0,
-      });
-      return;
-    }
-
-    if (categoryPool.length > 0 && currentSong) {
-      const idx = categoryPool.findIndex(s => s.id === currentSong.id);
-      // Smart-queue pools deliberately exclude the seed song, so idx is -1
-      // there — the top-scored recommendation (index 0) IS the next song.
-      // A raw, non-scored pool (before the smart queue kicks in) still has
-      // the seed in it, so advance sequentially instead.
-      const next = idx === -1 ? categoryPool[0] : categoryPool[(idx + 1) % categoryPool.length];
-      if (next && next.id !== currentSong.id) {
-        set({
-          currentSong:       next,
-          status:            'loading',
-          currentTime:       0,
-          duration:          0,
-          preloadedSong:     null,
-          crossfadeProgress: 0,
-        });
-      }
-    }
+    const next = computeNext(get());
+    if (!next) return;
+    set(s => ({
+      currentSong:       next.song,
+      status:            'loading',
+      currentTime:       0,
+      duration:          0,
+      queue:             next.fromQueue ? s.queue.slice(1) : s.queue,
+      preloadedSong:     null,
+      crossfadeProgress: 0,
+    }));
   },
+
+  // Read-only — what WOULD play next, without changing any state. Lets the
+  // crossfade engine know what to preload ahead of time.
+  peekNext: () => computeNext(get())?.song ?? null,
 
   // ── CrossfadeEngine actions ───────────────────────────
   setPreloadedSong:     (song) => set({ preloadedSong: song }),
@@ -190,6 +191,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       // status stays 'playing' — video already running
     });
     // ✅ Also track crossfade-advanced songs in history
+    if (userId) void writeHistory(userId, song);
+  },
+
+  // Same as setCurrentSongSilent, but also pops the manual queue if that's
+  // where the song came from — used when a crossfade finishes into it.
+  advanceToNext: (song, userId) => {
+    set(s => ({
+      currentSong:       song,
+      currentTime:       0,
+      preloadedSong:     null,
+      crossfadeProgress: 0,
+      queue:             s.queue[0]?.id === song.id ? s.queue.slice(1) : s.queue,
+    }));
     if (userId) void writeHistory(userId, song);
   },
 

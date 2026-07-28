@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { usePlayerStore } from '../store/usePlayerStore';
+import { useAuthStore } from '../store/useAuthStore';
+import type { Song } from '../types';
 
 declare global {
   interface Window {
@@ -96,6 +98,11 @@ const PLAYER_VARS: Record<string, number | string> = {
   origin: typeof window !== 'undefined' ? window.location.origin : '',
 };
 
+// ── Crossfade tuning ────────────────────────────────────────
+const CROSSFADE_SECONDS         = 5;   // how long the blend lasts
+const MIN_DURATION_FOR_CROSSFADE = 25; // skip crossfade on very short clips
+const CROSSFADE_TICK_MS         = 100;
+
 // ── Hook ───────────────────────────────────────────────────
 export const useYouTubePlayer = (
   containerId:        string,
@@ -113,6 +120,11 @@ export const useYouTubePlayer = (
   const statusRef      = useRef<string>('idle');
   const tabHiddenAtRef = useRef<number>(0);
 
+  // ✅ Crossfade engine state
+  const crossfadeActiveRef = useRef(false);
+  const crossfadeRampRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const skipHardLoadRef    = useRef(false); // set right before a crossfade-driven song swap
+
   // ✅ Recommendation callbacks
   const onEndedCallbackRef  = useRef<(() => void) | null>(null);
   const onSkippedCallbackRef = useRef<(() => void) | null>(null);
@@ -120,9 +132,11 @@ export const useYouTubePlayer = (
   const [isApiReady, setIsApiReady] = useState(false);
 
   const {
-    currentSong, status, volume, isMuted, queue,
-    setStatus, setCurrentTime, setDuration, playNext,
+    currentSong, status, volume, isMuted, queue, categoryPool,
+    setStatus, setCurrentTime, setDuration, playNext, peekNext,
+    setPreloadedSong, setCrossfadeProgress, advanceToNext,
   } = usePlayerStore();
+  const userId = useAuthStore(s => s.user?.uid ?? s.user?.id);
 
   useEffect(() => { volumeRef.current = volume;  }, [volume]);
   useEffect(() => { mutedRef.current  = isMuted; }, [isMuted]);
@@ -173,7 +187,7 @@ export const useYouTubePlayer = (
 
   // ── Init preload player ───────────────────────────────────
   useEffect(() => {
-    if (!isApiReady) return;
+    if (!isApiReady || !preloadContainerId) return;
     if (isPlayerReady(preloadRef.current)) return;
     const el = document.getElementById(preloadContainerId);
     if (!el) return;
@@ -190,20 +204,106 @@ export const useYouTubePlayer = (
     } catch (e) { console.debug('[YT] Preload init failed:', e); }
   }, [isApiReady, preloadContainerId]);
 
-  // ── Preload next song ─────────────────────────────────────
-  const nextVideoId = queue?.[0]?.videoId ?? null;
+  // ── Preload whatever would play next (queue or smart pool) ──
+  const nextUp = queue.length > 0 || categoryPool.length > 0 ? peekNext() : null;
+  const nextVideoId = nextUp?.videoId ?? null;
   useEffect(() => {
     if (!isApiReady || !nextVideoId) return;
     if (!isPlayerReady(preloadRef.current)) return;
     if (preloadedId.current === nextVideoId) return;
     safeCall(() => preloadRef.current!.cueVideoById(nextVideoId), 'preload.cue');
     preloadedId.current = nextVideoId;
-  }, [isApiReady, nextVideoId]);
+  }, [isApiReady, nextVideoId, currentSong?.id]);
+
+  // ── Crossfade: cancel and restore both players to a clean state ──
+  const abortCrossfade = useCallback(() => {
+    if (crossfadeRampRef.current) {
+      clearInterval(crossfadeRampRef.current);
+      crossfadeRampRef.current = null;
+    }
+    if (crossfadeActiveRef.current) {
+      safeCall(() => {
+        playerRef.current?.setVolume(mutedRef.current ? 0 : volumeRef.current);
+      }, 'crossfade.abort.mainVol');
+      safeCall(() => {
+        preloadRef.current?.pauseVideo();
+        preloadRef.current?.setVolume(0);
+        preloadRef.current?.mute();
+      }, 'crossfade.abort.preload');
+    }
+    crossfadeActiveRef.current = false;
+    setPreloadedSong(null);
+    setCrossfadeProgress(0);
+  }, [setPreloadedSong, setCrossfadeProgress]);
+
+  // ── Crossfade: swap preload -> main once the ramp finishes ──
+  const completeCrossfade = useCallback((next: Song) => {
+    const finished = playerRef.current;
+    playerRef.current  = preloadRef.current;
+    preloadRef.current = finished;
+
+    safeCall(() => { finished?.pauseVideo(); finished?.setVolume(0); finished?.mute(); }, 'crossfade.retireOld');
+    safeCall(() => {
+      playerRef.current?.setVolume(mutedRef.current ? 0 : volumeRef.current);
+      if (!mutedRef.current) playerRef.current?.unMute();
+    }, 'crossfade.finalizeNew');
+
+    crossfadeActiveRef.current = false;
+    preloadedId.current = null; // the (now empty) preload slot needs a fresh cue
+    setPreloadedSong(null);
+    setCrossfadeProgress(0);
+    skipHardLoadRef.current = true;
+    advanceToNext(next, userId);
+  }, [advanceToNext, setPreloadedSong, setCrossfadeProgress, userId]);
+
+  // ── Crossfade: start the volume ramp ─────────────────────
+  const startCrossfade = useCallback((next: Song) => {
+    if (!isPlayerReady(playerRef.current) || !isPlayerReady(preloadRef.current)) return;
+    if (crossfadeActiveRef.current) return;
+
+    crossfadeActiveRef.current = true;
+    setPreloadedSong(next);
+    setCrossfadeProgress(0.001);
+
+    safeCall(() => {
+      preloadRef.current!.unMute();
+      preloadRef.current!.setVolume(0);
+      preloadRef.current!.playVideo();
+    }, 'crossfade.startPreload');
+
+    const startedAt = Date.now();
+    const totalMs   = CROSSFADE_SECONDS * 1000;
+
+    crossfadeRampRef.current = setInterval(() => {
+      const t = Math.min(1, (Date.now() - startedAt) / totalMs);
+      const liveVol = mutedRef.current ? 0 : volumeRef.current;
+
+      setCrossfadeProgress(t);
+      safeCall(() => playerRef.current?.setVolume(Math.round(liveVol * (1 - t))),  'crossfade.mainVol');
+      safeCall(() => preloadRef.current?.setVolume(Math.round(liveVol * t)),       'crossfade.preVol');
+
+      if (t >= 1) {
+        if (crossfadeRampRef.current) { clearInterval(crossfadeRampRef.current); crossfadeRampRef.current = null; }
+        completeCrossfade(next);
+      }
+    }, CROSSFADE_TICK_MS);
+  }, [setPreloadedSong, setCrossfadeProgress, completeCrossfade]);
 
   // ── Init / load video on song change ─────────────────────
   useEffect(() => {
     if (!isApiReady || !currentSong) return;
 
+    if (skipHardLoadRef.current) {
+      // Crossfade already swapped the active player and is playing this
+      // song — just sync the UI's duration, nothing to (re)load.
+      skipHardLoadRef.current = false;
+      setCurrentTime(0);
+      const dur = safeGet(() => playerRef.current?.getDuration() ?? 0, 0);
+      if (dur > 0) setDuration(dur);
+      return;
+    }
+
+    abortCrossfade();
     setCurrentTime(0);
     setDuration(0);
     preloadedId.current = null;
@@ -235,8 +335,12 @@ export const useYouTubePlayer = (
             startWatchdog('onReady');
           },
 
-          onStateChange: (e: { target: unknown; data: any; }) => {
+          onStateChange: (e: { target: unknown; data: number; }) => {
             if (!isPlayerReady(e.target)) return;
+            // A player that's been retired into the preload slot (after a
+            // crossfade swap) can still fire late events — ignore anything
+            // that isn't from whichever player is currently "main".
+            if (e.target !== playerRef.current) return;
             const S = window.YT?.PlayerState;
             if (!S) return;
 
@@ -259,14 +363,16 @@ export const useYouTubePlayer = (
             }
 
             if (e.data === S.ENDED) {
-              // ✅ Fire completed callback BEFORE playNext
+              // Crossfade already handled (or is handling) the transition.
+              if (crossfadeActiveRef.current) return;
               onEndedCallbackRef.current?.();
               setStatus('idle');
               playNext();
             }
           },
 
-          onError: (e: { data: number; }) => {
+          onError: (e: { target: unknown; data: number; }) => {
+            if (e.target !== playerRef.current) return;
             console.debug('[YT] Error code:', e.data);
             initAttemptRef.current = false;
             if (watchdogRef.current) clearTimeout(watchdogRef.current);
@@ -288,19 +394,24 @@ export const useYouTubePlayer = (
   useEffect(() => {
     if (!isPlayerReady(playerRef.current)) return;
     if (status === 'playing') safeCall(() => playerRef.current!.playVideo(),  'play');
-    if (status === 'paused')  safeCall(() => playerRef.current!.pauseVideo(), 'pause');
-  }, [status]);
+    if (status === 'paused') {
+      if (crossfadeActiveRef.current) abortCrossfade();
+      safeCall(() => playerRef.current!.pauseVideo(), 'pause');
+    }
+  }, [status, abortCrossfade]);
 
   // ── Volume / mute ─────────────────────────────────────────
   useEffect(() => {
     if (!isPlayerReady(playerRef.current)) return;
+    if (crossfadeActiveRef.current) return; // ramp owns volume while blending
     safeCall(() => {
       playerRef.current!.setVolume(volume);
-      isMuted ? playerRef.current!.mute() : playerRef.current!.unMute();
+      if (isMuted) playerRef.current!.mute();
+      else         playerRef.current!.unMute();
     }, 'vol/mute');
   }, [volume, isMuted]);
 
-  // ── Poll currentTime ──────────────────────────────────────
+  // ── Poll currentTime + trigger crossfade near the end ────
   useEffect(() => {
     if (status === 'playing') {
       intervalRef.current = setInterval(() => {
@@ -309,27 +420,41 @@ export const useYouTubePlayer = (
         const dur = safeGet(() => playerRef.current!.getDuration(), 0);
         if (t   >= 0) setCurrentTime(t);
         if (dur > 0)  setDuration(dur);
+
+        if (
+          !crossfadeActiveRef.current &&
+          dur >= MIN_DURATION_FOR_CROSSFADE &&
+          dur - t <= CROSSFADE_SECONDS && dur - t > 0
+        ) {
+          const next = peekNext();
+          if (next && isPlayerReady(preloadRef.current) && preloadedId.current === next.videoId) {
+            startCrossfade(next);
+          }
+        }
       }, 500);
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current);
     }
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [status, setCurrentTime, setDuration]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, setCurrentTime, setDuration, startCrossfade]);
 
   // ── Seek ──────────────────────────────────────────────────
   const seek = useCallback((seconds: number) => {
     if (!isPlayerReady(playerRef.current)) return;
+    if (crossfadeActiveRef.current) abortCrossfade();
     isSeeking.current = true;
     setCurrentTime(seconds);
     safeCall(() => playerRef.current!.seekTo(seconds, true), 'seekTo');
     setTimeout(() => { isSeeking.current = false; }, 300);
-  }, [setCurrentTime]);
+  }, [setCurrentTime, abortCrossfade]);
 
   // ── ✅ skipSong — skip button pe yahi call karo ───────────
   const skipSong = useCallback(() => {
+    if (crossfadeActiveRef.current) abortCrossfade();
     onSkippedCallbackRef.current?.(); // log skip event
     playNext();
-  }, [playNext]);
+  }, [playNext, abortCrossfade]);
 
   // ── ✅ Callback registrars ────────────────────────────────
   const onSongEnd = useCallback((cb: () => void) => {
@@ -345,6 +470,7 @@ export const useYouTubePlayer = (
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      if (crossfadeRampRef.current) clearInterval(crossfadeRampRef.current);
       try { playerRef.current?.destroy();  } catch { /* ignore */ }
       try { preloadRef.current?.destroy(); } catch { /* ignore */ }
       playerRef.current  = null;

@@ -3,7 +3,7 @@ import { useYouTubePlayer } from '../../hooks/useYouTubePlayer';
 import { usePlayerStore }   from '../../store/usePlayerStore';
 
 export const PlayerEngine = () => {
-  const { seek }  = useYouTubePlayer('yt-player-frame', '');
+  const { seek }  = useYouTubePlayer('yt-player-frame', 'yt-player-frame-preload');
   const setSeekFn = usePlayerStore(s => s.setSeekFn);
 
   useEffect(() => {
@@ -26,6 +26,10 @@ export const PlayerEngine = () => {
     >
       <div
         id="yt-player-frame"
+        style={{ width: '1px', height: '1px' }}
+      />
+      <div
+        id="yt-player-frame-preload"
         style={{ width: '1px', height: '1px' }}
       />
     </div>
