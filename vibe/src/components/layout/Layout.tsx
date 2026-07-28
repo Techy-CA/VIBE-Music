@@ -8,15 +8,17 @@ import { PlayerEngine }   from '../player/PlayerEngine';
 import { MobileBar }      from '../player/MobileBar';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { useAuthStore }   from '../../store/useAuthStore';
+import { useAdmin }       from '../../hooks/useAdmin';
 import { cn }             from '../../utils/cn';
 
-const NAV = [
+const BASE_NAV = [
   { to: '/',          icon: Home,       label: 'Home'      },
   { to: '/search',    icon: Search,     label: 'Search'    },
   { to: '/playlists', icon: ListMusic,  label: 'Playlists' },
-  { to: '/add',       icon: PlusCircle, label: 'Add'       },
   { to: '/profile',   icon: User,       label: 'Profile'   },
 ];
+
+const ADD_NAV_ITEM = { to: '/add', icon: PlusCircle, label: 'Add' };
 
 const BOTTOM_NAV_H = 60;
 const MOBILE_BAR_H = 63;
@@ -25,7 +27,12 @@ const TIMELINE_H   = 3;
 export const Layout = ({ children }: { children: React.ReactNode }) => {
   const currentSong = usePlayerStore(s => s.currentSong);
   const user        = useAuthStore(s => s.user);
+  const { isAdmin }  = useAdmin();
   const [mobileMenu, setMobileMenu] = useState(false);
+
+  const NAV = isAdmin
+    ? [...BASE_NAV.slice(0, 3), ADD_NAV_ITEM, ...BASE_NAV.slice(3)]
+    : BASE_NAV;
 
   const hasPlayer  = !!currentSong;
   const mobilePadB = hasPlayer

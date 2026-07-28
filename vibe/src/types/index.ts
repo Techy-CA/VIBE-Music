@@ -63,7 +63,7 @@ export interface UserTasteProfile {
   updatedAt: any;
 }
 
-export const ADMIN_EMAIL = 'chinmayysugandhi@gmail.com';
+export const ADMIN_EMAIL = 'cs@gmail.com';
 
 export const GENRES = [
   { id: 'bollywood',  label: 'Bollywood',  emoji: '🎬' },

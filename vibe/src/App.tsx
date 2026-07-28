@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Layout }        from './components/layout/Layout';
 import { useAuth }       from './hooks/useAuth';
 import { useAuthStore }  from './store/useAuthStore';
+import { useAdmin }      from './hooks/useAdmin';
 import { SplashScreen }  from './components/SplashScreen'; // ✅
 
 // ── Pages ──────────────────────────────────────────────────
@@ -37,6 +38,12 @@ const Guard = ({ children }: { children: React.ReactNode }) => {
   return user ? <>{children}</> : <Navigate to="/auth" replace />;
 };
 
+// ── Admin-only guard ───────────────────────────────────────
+const AdminGuard = ({ children }: { children: React.ReactNode }) => {
+  const { isAdmin } = useAdmin();
+  return isAdmin ? <>{children}</> : <Navigate to="/" replace />;
+};
+
 // ── Spinner ────────────────────────────────────────────────
 const Spinner = () => (
   <div className="min-h-screen bg-[#0d0d0d] flex items-center justify-center">
@@ -59,7 +66,7 @@ const AppShell = () => {
           <Route path="/search"          element={<Page><SearchPage /></Page>} />
           <Route path="/playlists"       element={<Page><Playlists /></Page>} />
           <Route path="/playlist/:id"    element={<Page><PlaylistDetail /></Page>} />
-          <Route path="/add"             element={<Page><AddSong /></Page>} />
+          <Route path="/add"             element={<AdminGuard><Page><AddSong /></Page></AdminGuard>} />
           <Route path="/profile"         element={<Page><Profile /></Page>} />
           <Route path="/profile/:userId" element={<Page><Profile /></Page>} />
           <Route path="/see-all/:type"   element={<Page><SeeAll /></Page>} />
