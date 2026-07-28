@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -451,7 +451,7 @@ const QuickPlaySkeleton = () => (
 // ── Home ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════
 export default function Home() {
-  const { songs, isLoading, isLoadingMore, hasMore, loadMore } = useSongFeed();
+  const { songs, isLoading }  = useSongFeed();
   const { songs: allSongs }   = useAllSongs();
   const { counts: genreCounts } = useGenreCounts();
   const { likedIds }          = useLikes();
@@ -469,18 +469,6 @@ export default function Home() {
 
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [playlistSong,  setPlaylistSong]  = useState<Song | null>(null);
-
-  // ✅ Infinite scroll
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!sentinelRef.current) return;
-    const observer = new IntersectionObserver(
-      entries => { if (entries[0].isIntersecting && hasMore && !isLoadingMore) loadMore(); },
-      { threshold: 0.1, rootMargin: '200px' },
-    );
-    observer.observe(sentinelRef.current);
-    return () => observer.disconnect();
-  }, [hasMore, isLoadingMore, loadMore]);
 
   const hour     = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -643,23 +631,6 @@ export default function Home() {
               onAddToPlaylist={handleAddToPlaylist} />
           ))}
         </HSection>
-      )}
-
-      {/* Infinite scroll trigger */}
-      <div ref={sentinelRef} className="h-4 mt-4" />
-
-      {/* Loading more */}
-      {isLoadingMore && (
-        <div className="flex justify-center py-3">
-          <span className="w-5 h-5 border-2 border-white/15 border-t-violet-400 rounded-full animate-spin" />
-        </div>
-      )}
-
-      {/* All loaded */}
-      {!hasMore && songs.length > 20 && (
-        <p className="text-center text-[11.5px] text-zinc-700 py-2">
-          ✓ All {songs.length} songs loaded
-        </p>
       )}
 
       {/* Browse by Genre */}

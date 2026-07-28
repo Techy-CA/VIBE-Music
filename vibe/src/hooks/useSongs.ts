@@ -9,7 +9,7 @@ import { GENRES } from '../types';
 import type { Song } from '../types';
 
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 60;
 
 // The library now grows by hundreds of songs a day via automatic ingestion,
 // so nothing here uses onSnapshot anymore — a live listener on a
