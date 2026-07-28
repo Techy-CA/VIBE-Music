@@ -22,6 +22,7 @@ interface PlayerState {
   // ✅ Crossfade state
   preloadedSong:     Song | null;
   crossfadeProgress: number;
+  crossfadeEnabled:  boolean;
 
   seekFn: ((seconds: number) => void) | null;
 
@@ -47,9 +48,21 @@ interface PlayerState {
   // ✅ CrossfadeEngine actions
   setPreloadedSong:     (song: Song | null) => void;
   setCrossfadeProgress: (n: number) => void;
+  setCrossfadeEnabled:  (enabled: boolean) => void;
   setCurrentSongSilent: (song: Song, userId?: string) => void;
   advanceToNext:        (song: Song, userId?: string) => void;
   dequeueFirst:         () => void;
+}
+
+const CROSSFADE_PREF_KEY = 'zuno_crossfade_enabled';
+
+function loadCrossfadePref(): boolean {
+  try {
+    const raw = localStorage.getItem(CROSSFADE_PREF_KEY);
+    return raw === null ? true : raw === '1';
+  } catch {
+    return true;
+  }
 }
 
 // Shared "what would play next" logic — used by both the hard-cut playNext()
@@ -115,6 +128,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   seekFn:            null,
   preloadedSong:     null,
   crossfadeProgress: 0,
+  crossfadeEnabled:  loadCrossfadePref(),
 
   // ── Playback ───────────────────────────────────────────
   play: (song, pool, userId) => {
@@ -180,6 +194,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   // ── CrossfadeEngine actions ───────────────────────────
   setPreloadedSong:     (song) => set({ preloadedSong: song }),
   setCrossfadeProgress: (n)    => set({ crossfadeProgress: n }),
+  setCrossfadeEnabled:  (enabled) => {
+    try { localStorage.setItem(CROSSFADE_PREF_KEY, enabled ? '1' : '0'); } catch { /* ignore */ }
+    set({ crossfadeEnabled: enabled });
+  },
 
   // Advance currentSong after crossfade WITHOUT reloading the video
   setCurrentSongSilent: (song, userId) => {

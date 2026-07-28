@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Music2, Heart, X, LogOut } from 'lucide-react';
+import { Music2, Heart, X, LogOut, Shuffle } from 'lucide-react';
 import { useAuthStore }    from '../store/useAuthStore';
 import { useAuth }         from '../hooks/useAuth';
 import { usePlayerStore }  from '../store/usePlayerStore';
@@ -20,6 +20,26 @@ const Stat = ({ value, label }: { value: number | string; label: string }) => (
     <p className="text-xl font-bold text-white">{value}</p>
     <p className="text-[11px] text-zinc-500 mt-0.5">{label}</p>
   </div>
+);
+
+// ── Toggle switch ──────────────────────────────────────────
+const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
+  <button
+    role="switch"
+    aria-checked={checked}
+    onClick={() => onChange(!checked)}
+    className={cn(
+      'relative w-10 h-6 rounded-full flex-shrink-0 transition-colors duration-200 cursor-pointer',
+      checked ? 'bg-violet-600' : 'bg-white/10',
+    )}
+  >
+    <motion.span
+      layout
+      transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm"
+      style={{ x: checked ? 16 : 0 }}
+    />
+  </button>
 );
 
 // ── Song Row ───────────────────────────────────────────────
@@ -120,6 +140,8 @@ export default function Profile() {
   const { signOutUser } = useAuth();
   const { playlists }   = usePlaylists();   // ✅ correct hook name
   const { likedIds }    = useLikes();
+  const crossfadeEnabled    = usePlayerStore(s => s.crossfadeEnabled);
+  const setCrossfadeEnabled = usePlayerStore(s => s.setCrossfadeEnabled);
 
   const [profile,   setProfile  ] = useState<UserProfile | null>(null);
   const [songs,     setSongs    ] = useState<Song[]>([]);
@@ -211,6 +233,30 @@ export default function Profile() {
           <Stat value={songs.reduce((a, s) => a + s.likeCount, 0)} label="Total Likes" />
         </div>
       </div>
+
+      {/* ── Playback settings ── */}
+      {isOwner && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, delay: 0.05 }}
+          className="mb-6 rounded-2xl bg-white/[0.03] border border-white/[0.06] p-4"
+        >
+          <div className="flex items-center gap-2 mb-3">
+            <Shuffle className="w-3.5 h-3.5 text-zinc-500" />
+            <h2 className="text-[13px] font-semibold text-zinc-200">Playback</h2>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[13px] font-medium text-zinc-200">Crossfade</p>
+              <p className="text-[11.5px] text-zinc-500 mt-0.5">
+                Smoothly blend into the next song instead of a hard cut.
+              </p>
+            </div>
+            <Toggle checked={crossfadeEnabled} onChange={setCrossfadeEnabled} />
+          </div>
+        </motion.div>
+      )}
 
       {/* ── Tabs ── */}
       <div className="flex items-center gap-1 mb-5 bg-white/[0.03] border border-white/[0.06] rounded-xl p-1 w-fit">

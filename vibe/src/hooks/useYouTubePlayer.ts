@@ -99,9 +99,14 @@ const PLAYER_VARS: Record<string, number | string> = {
 };
 
 // ── Crossfade tuning ────────────────────────────────────────
-const CROSSFADE_SECONDS         = 5;   // how long the blend lasts
-const MIN_DURATION_FOR_CROSSFADE = 25; // skip crossfade on very short clips
-const CROSSFADE_TICK_MS         = 100;
+const CROSSFADE_SECONDS          = 5;    // how long the blend lasts
+const MIN_DURATION_FOR_CROSSFADE = 25;   // skip crossfade on very short clips
+const CROSSFADE_TICK_MS          = 100;
+// Most tracks' own intro is a quiet build-up or a baked-in fade-in — blending
+// our crossfade into that reads as dead air / a second fade stacked on top
+// of the first. Jumping a few seconds in lands past it more often than not.
+const INTRO_SKIP_MAX_SECONDS     = 6;
+const INTRO_SKIP_RATIO           = 0.08; // as a fraction of the track's length
 
 // ── Hook ───────────────────────────────────────────────────
 export const useYouTubePlayer = (
@@ -132,15 +137,18 @@ export const useYouTubePlayer = (
   const [isApiReady, setIsApiReady] = useState(false);
 
   const {
-    currentSong, status, volume, isMuted, queue, categoryPool,
+    currentSong, status, volume, isMuted, queue, categoryPool, crossfadeEnabled,
     setStatus, setCurrentTime, setDuration, playNext, peekNext,
     setPreloadedSong, setCrossfadeProgress, advanceToNext,
   } = usePlayerStore();
   const userId = useAuthStore(s => s.user?.uid ?? s.user?.id);
 
+  const crossfadeEnabledRef = useRef(crossfadeEnabled);
+
   useEffect(() => { volumeRef.current = volume;  }, [volume]);
   useEffect(() => { mutedRef.current  = isMuted; }, [isMuted]);
   useEffect(() => { statusRef.current = status;  }, [status]);
+  useEffect(() => { crossfadeEnabledRef.current = crossfadeEnabled; }, [crossfadeEnabled]);
 
   // ── Watchdog ──────────────────────────────────────────────
   const startWatchdog = useCallback((label: string) => {
@@ -265,7 +273,15 @@ export const useYouTubePlayer = (
     setPreloadedSong(next);
     setCrossfadeProgress(0.001);
 
+    // Skip past the incoming track's own intro/fade-in so the blend lands
+    // on actual content instead of stacking our fade on top of its fade.
+    const preDur = safeGet(() => preloadRef.current!.getDuration(), 0);
+    const introSkip = preDur > 0
+      ? Math.min(INTRO_SKIP_MAX_SECONDS, preDur * INTRO_SKIP_RATIO)
+      : 0;
+
     safeCall(() => {
+      if (introSkip > 1.5) preloadRef.current!.seekTo(introSkip, true);
       preloadRef.current!.unMute();
       preloadRef.current!.setVolume(0);
       preloadRef.current!.playVideo();
@@ -422,6 +438,7 @@ export const useYouTubePlayer = (
         if (dur > 0)  setDuration(dur);
 
         if (
+          crossfadeEnabledRef.current &&
           !crossfadeActiveRef.current &&
           dur >= MIN_DURATION_FOR_CROSSFADE &&
           dur - t <= CROSSFADE_SECONDS && dur - t > 0
