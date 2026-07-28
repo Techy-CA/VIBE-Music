@@ -2,16 +2,43 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from './_lib/firebaseAdmin';
 import { searchVideoIds, playlistVideoIds, videoDetails, parseIsoDuration } from './_lib/youtube';
-import { GENRE_SEARCH_QUERIES } from './_lib/genreQueries';
+import { GENRE_QUERY_POOL, GENRE_RECENCY_SEED } from './_lib/genreQueries';
 import { CURATED_PLAYLISTS } from './_lib/curatedPlaylists';
 import { cleanTitle } from '../src/lib/cleanTitle';
 
-const RESULTS_PER_GENRE     = 8;   // trending videos pulled per genre per run
 const MAX_TRACK_SECONDS     = 12 * 60; // skip mixes/full albums/streams
 const FIRESTORE_BATCH_LIMIT = 400;
+const RESULTS_PER_QUERY     = 50;      // YouTube's max per search call
 
-// ── Auto-ingest trending + curated YouTube tracks into the `songs` collection ──
-// Triggered by Vercel Cron (see vercel.json) or manually via an authenticated POST.
+// YouTube's free daily quota is 10,000 units; search.list costs 100 each.
+// Budget stays under that so the run never 403s partway through.
+const QUOTA_BUDGET       = 9200;
+const RECENCY_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000; // last 3 days
+
+// Flatten the per-genre query pool into a single rotating list.
+const FLAT_POOL: { genreId: string; query: string }[] =
+  Object.entries(GENRE_QUERY_POOL).flatMap(([genreId, queries]) =>
+    queries.map(query => ({ genreId, query })),
+  );
+
+// Pick today's slice of the pool — wraps around so, over several days,
+// every query in the pool eventually runs instead of just the first N forever.
+function todaysPoolSlice(size: number): { genreId: string; query: string }[] {
+  const dayIndex = Math.floor(Date.now() / 86_400_000);
+  const start = (dayIndex * size) % FLAT_POOL.length;
+  const slice: { genreId: string; query: string }[] = [];
+  for (let i = 0; i < size; i++) {
+    slice.push(FLAT_POOL[(start + i) % FLAT_POOL.length]);
+  }
+  return slice;
+}
+
+// ── Auto-ingest trending + fresh + curated YouTube tracks into `songs` ──
+// Triggered daily by Vercel Cron (see vercel.json) or manually via an
+// authenticated request. Every run: (1) checks every genre for videos
+// uploaded in the last few days — so new releases keep showing up even
+// after the discovery pool below plateaus, then (2) burns the rest of the
+// day's YouTube quota rotating through a large pool of genre search angles.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
@@ -31,24 +58,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const db = getAdminDb();
 
-    // 1. Collect candidate video IDs, each tagged with the genre(s) that surfaced it.
     const candidateGenres = new Map<string, Set<string>>();
     const addCandidate = (videoId: string, genreId: string) => {
       if (!candidateGenres.has(videoId)) candidateGenres.set(videoId, new Set());
       candidateGenres.get(videoId)!.add(genreId);
     };
 
+    let quotaUsed = 0;
+    const searchesRun: string[] = [];
+
+    // 1. Freshness pass — one recency-ordered query per genre, every run.
+    const publishedAfter = new Date(Date.now() - RECENCY_LOOKBACK_MS).toISOString();
     await Promise.all(
-      Object.entries(GENRE_SEARCH_QUERIES).map(async ([genreId, query]) => {
+      Object.entries(GENRE_RECENCY_SEED).map(async ([genreId, query]) => {
         try {
-          const ids = await searchVideoIds(apiKey, query, RESULTS_PER_GENRE);
+          const ids = await searchVideoIds(apiKey, query, {
+            maxResults: RESULTS_PER_QUERY,
+            order: 'date',
+            publishedAfter,
+          });
           ids.forEach(id => addCandidate(id, genreId));
+          searchesRun.push(`[fresh:${genreId}] "${query}" -> ${ids.length}`);
         } catch (err) {
-          console.error(`[ingest-songs] search failed for genre "${genreId}":`, err);
+          console.error(`[ingest-songs] recency search failed for "${genreId}":`, err);
         }
       }),
     );
+    quotaUsed += Object.keys(GENRE_RECENCY_SEED).length * 100;
 
+    // 2. Discovery pass — rotate through the big query pool with whatever
+    //    quota is left, so the whole pool cycles over multiple days.
+    const remainingBudget = QUOTA_BUDGET - quotaUsed;
+    const poolCallsToday  = Math.max(0, Math.floor(remainingBudget / 100));
+    const todaysQueries   = todaysPoolSlice(poolCallsToday);
+
+    for (const { genreId, query } of todaysQueries) {
+      try {
+        const ids = await searchVideoIds(apiKey, query, { maxResults: RESULTS_PER_QUERY });
+        quotaUsed += 100;
+        ids.forEach(id => addCandidate(id, genreId));
+        searchesRun.push(`[pool:${genreId}] "${query}" -> ${ids.length}`);
+      } catch (err) {
+        console.error(`[ingest-songs] search failed for "${genreId}" / "${query}":`, err);
+      }
+    }
+
+    // 3. Curated playlists, if configured — cheap regardless of size.
     await Promise.all(
       CURATED_PLAYLISTS.map(async ({ genreId, playlistId }) => {
         try {
@@ -60,17 +115,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }),
     );
 
-    // 2. Drop anything already in the library.
+    // 4. Drop anything already in the library.
     const existingSnap = await db.collection('songs').select('videoId').get();
     const existingIds  = new Set(existingSnap.docs.map(d => d.data().videoId as string));
     const newIds = [...candidateGenres.keys()].filter(id => !existingIds.has(id));
 
     if (newIds.length === 0) {
-      res.status(200).json({ added: 0, message: 'No new songs found this run.' });
+      res.status(200).json({ added: 0, quotaUsed, searchesRun, message: 'No new songs found this run.' });
       return;
     }
 
-    // 3. Fetch full details, filter out non-tracks, write to Firestore.
+    // 5. Fetch full details, filter out non-tracks, write to Firestore.
     const details = await videoDetails(apiKey, newIds);
 
     let batch       = db.batch();
@@ -114,7 +169,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (opsInBatch > 0) await batch.commit();
 
-    res.status(200).json({ added, byGenre, scanned: newIds.length });
+    res.status(200).json({ added, byGenre, scanned: newIds.length, quotaUsed, searchesRun });
   } catch (err) {
     console.error('[ingest-songs] failed:', err);
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });

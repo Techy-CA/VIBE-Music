@@ -11,23 +11,32 @@ export interface YTVideoDetails {
   contentDetails: { duration: string };
 }
 
-// ── Search recent/relevant videos for a query — used for trending discovery ──
+export interface SearchOptions {
+  maxResults?:     number;
+  order?:          'relevance' | 'date' | 'viewCount' | 'rating';
+  publishedAfter?: string; // ISO 8601 — restrict to videos uploaded after this
+}
+
+// ── Search relevant/recent videos for a query — used for trending discovery ──
 export async function searchVideoIds(
   apiKey: string,
   query: string,
-  maxResults = 10,
+  opts: SearchOptions = {},
 ): Promise<string[]> {
+  const { maxResults = 10, order = 'relevance', publishedAfter } = opts;
+
   const params = new URLSearchParams({
     key: apiKey,
     part: 'snippet',
     q: query,
     type: 'video',
     videoCategoryId: '10', // Music
-    order: 'relevance',
+    order,
     regionCode: 'IN',
     safeSearch: 'moderate',
     maxResults: String(maxResults),
   });
+  if (publishedAfter) params.set('publishedAfter', publishedAfter);
 
   const res = await fetch(`${YT_API}/search?${params}`);
   if (!res.ok) throw new Error(`YouTube search failed (${res.status}): ${await res.text()}`);
