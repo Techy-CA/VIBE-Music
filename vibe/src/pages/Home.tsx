@@ -483,7 +483,7 @@ export default function Home() {
 
   // ── Feed sections (paginated songs) ─────────────────────
   const trending = useMemo(() =>
-    shuffle([...songs].sort((a, b) => b.likeCount - a.likeCount), 1001).slice(0, 12),
+    [...songs].sort((a, b) => b.likeCount - a.likeCount).slice(0, 12),
     [songs]);
 
   const recentAdded = useMemo(() =>

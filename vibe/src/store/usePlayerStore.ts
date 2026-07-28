@@ -157,8 +157,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
 
     if (categoryPool.length > 0 && currentSong) {
-      const idx  = categoryPool.findIndex(s => s.id === currentSong.id);
-      const next = categoryPool[(idx + 1) % categoryPool.length];
+      const idx = categoryPool.findIndex(s => s.id === currentSong.id);
+      // Smart-queue pools deliberately exclude the seed song, so idx is -1
+      // there — the top-scored recommendation (index 0) IS the next song.
+      // A raw, non-scored pool (before the smart queue kicks in) still has
+      // the seed in it, so advance sequentially instead.
+      const next = idx === -1 ? categoryPool[0] : categoryPool[(idx + 1) % categoryPool.length];
       if (next && next.id !== currentSong.id) {
         set({
           currentSong:       next,
