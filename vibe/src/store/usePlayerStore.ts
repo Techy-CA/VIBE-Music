@@ -18,6 +18,7 @@ interface PlayerState {
   queue:             Song[];
   queueVisible:      boolean;
   categoryPool:      Song[];
+  pickedNext:        Song | null; // stable choice from categoryPool, decided once per pool build
   recentSongIds:     string[]; // last few played — keeps next-song picks out of tight loops
 
   // ✅ Crossfade state
@@ -66,31 +67,43 @@ function loadCrossfadePref(): boolean {
   }
 }
 
-// How many of the top-scored candidates to randomize among when picking the
-// next song. Always taking #1 sounds "smart" but two or three songs that
-// mutually out-score everything else for each other (identical tag sets)
-// turns into a permanent ping-pong loop between them — this breaks that
-// while staying within the genre-matched top of the pool.
+// How many of the top-scored candidates to randomize among when a fresh
+// smart-queue pool is built. Always taking #1 sounds "smart" but two or
+// three songs that mutually out-score everything else for each other
+// (identical tag sets) turns into a permanent ping-pong loop between them.
+//
+// Important: this pick happens ONCE, right when the pool is built (see
+// pickNextFrom / setQueue below) — NOT every time something asks "what's
+// next". peekNext() used to call Math.random() itself on every call, which
+// meant the preload player, the crossfade trigger, and the actual
+// transition could each land on a different song — that's what was causing
+// the 30-40s stalls (preload kept getting re-cued with a new random video
+// on every render, never finishing a buffer) and the title/audio mismatch.
 const NEXT_SONG_RANDOM_WINDOW = 5;
 const RECENT_HISTORY_LIMIT    = 6;
 
+function pickNextFrom(pool: Song[], recentSongIds: string[]): Song | null {
+  if (pool.length === 0) return null;
+  const window = pool.slice(0, NEXT_SONG_RANDOM_WINDOW);
+  const fresh  = window.filter(s => !recentSongIds.includes(s.id));
+  const from   = fresh.length > 0 ? fresh : window;
+  return from[Math.floor(Math.random() * from.length)] ?? null;
+}
+
 // Shared "what would play next" logic — used by both the hard-cut playNext()
 // and peekNext() (read-only, so the crossfade engine can preload it early).
+// Both read the SAME stable pickedNext value, so preload/crossfade/title
+// always agree on what "next" actually means until the pool changes again.
 function computeNext(state: PlayerState): { song: Song; fromQueue: boolean } | null {
   if (state.queue.length > 0) return { song: state.queue[0], fromQueue: true };
 
-  const { currentSong, categoryPool, recentSongIds } = state;
+  const { currentSong, categoryPool, pickedNext } = state;
   if (categoryPool.length > 0 && currentSong) {
     const idx = categoryPool.findIndex(s => s.id === currentSong.id);
 
     if (idx === -1) {
-      // Smart-queue pools deliberately exclude the seed song — pick randomly
-      // among the top few matches instead of always #1, and prefer one that
-      // hasn't played recently so a tight mutual-top-pick pair can't loop.
-      const window = categoryPool.slice(0, NEXT_SONG_RANDOM_WINDOW);
-      const fresh  = window.filter(s => !recentSongIds.includes(s.id));
-      const pool   = fresh.length > 0 ? fresh : window;
-      const next   = pool[Math.floor(Math.random() * pool.length)];
+      // Smart-queue pools deliberately exclude the seed song.
+      const next = pickedNext ?? categoryPool[0];
       if (next) return { song: next, fromQueue: false };
     } else {
       // A raw, non-scored pool (before the smart queue kicks in) still has
@@ -149,6 +162,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   queue:             [],
   queueVisible:      false,
   categoryPool:      [],
+  pickedNext:        null,
   recentSongIds:     [],
   seekFn:            null,
   preloadedSong:     null,
@@ -163,6 +177,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       currentTime:       0,
       duration:          0,
       categoryPool:      pool ?? s.categoryPool,
+      pickedNext:        null, // stale until the smart queue rebuilds for this new seed
       preloadedSong:     null,
       crossfadeProgress: 0,
       recentSongIds:     pushRecent(s.recentSongIds, s.currentSong?.id),
@@ -185,7 +200,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setSeekFn:      (fn) => set({ seekFn: fn }),
   registerSeekFn: (fn) => set({ seekFn: fn }),
 
-  setQueue: (songs) => set({ categoryPool: songs }),
+  // Smart-queue pool arrives here — decide "next" once, right now, instead
+  // of re-rolling every time something asks (that was the actual bug).
+  setQueue: (songs) => set(s => ({
+    categoryPool: songs,
+    pickedNext:   pickNextFrom(songs, s.recentSongIds),
+  })),
 
   addToQueue: (song) => set(s => {
     if (s.queue.find(q => q.id === song.id)) return s;
@@ -208,6 +228,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       currentTime:       0,
       duration:          0,
       queue:             next.fromQueue ? s.queue.slice(1) : s.queue,
+      pickedNext:        null, // stale until the smart queue rebuilds for the new seed
       preloadedSong:     null,
       crossfadeProgress: 0,
       recentSongIds:     pushRecent(s.recentSongIds, s.currentSong?.id),
@@ -231,6 +252,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     set(s => ({
       currentSong:       song,
       currentTime:       0,
+      pickedNext:        null,
       preloadedSong:     null,
       crossfadeProgress: 0,
       recentSongIds:     pushRecent(s.recentSongIds, s.currentSong?.id),
@@ -246,6 +268,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     set(s => ({
       currentSong:       song,
       currentTime:       0,
+      pickedNext:        null,
       preloadedSong:     null,
       crossfadeProgress: 0,
       queue:             s.queue[0]?.id === song.id ? s.queue.slice(1) : s.queue,
