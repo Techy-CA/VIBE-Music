@@ -1,14 +1,24 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, X, Heart, SlidersHorizontal, Check, ListPlus } from 'lucide-react';
+import { Search, X, Heart, SlidersHorizontal, Check, ListPlus, ExternalLink, Loader2, Play } from 'lucide-react';
 import { usePlayerStore }    from '../store/usePlayerStore';
 import { useAuthStore }      from '../store/useAuthStore';
 import { useLikes }          from '../hooks/useLikes';
 import { useAllSongs, useGenreCounts } from '../hooks/useSongs';
 import { useRecentlyPlayed } from '../hooks/useRecentlyPlayed';
+import { auth }              from '../lib/firebase';
+import { addSongIfNew }      from '../lib/firestore';
 import { GENRES }            from '../types';
 import { cn }                from '../utils/cn';
 import type { Song }         from '../types';
+
+interface LiveResult {
+  videoId:    string;
+  title:      string;
+  youtubeUrl: string;
+  thumbnail:  string;
+  duration:   number;
+}
 
 
 const EqBars = () => (
@@ -136,6 +146,32 @@ const SearchRow = ({ song, pool, onPlay }: { song: Song; pool: Song[]; onPlay: (
 };
 
 
+// ── Live YouTube result row — play-only, gets saved once played ──
+const LiveResultRow = ({ result, onPlay }: { result: LiveResult; onPlay: (r: LiveResult) => void }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 6 }}
+    animate={{ opacity: 1, y: 0 }}
+    onClick={() => onPlay(result)}
+    className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all group border border-transparent hover:bg-white/4 hover:border-white/6 select-none"
+  >
+    <div className="relative flex-shrink-0">
+      <img src={result.thumbnail} alt={result.title} loading="lazy" decoding="async"
+        className="w-10 h-10 rounded-lg object-cover" />
+      <div className="absolute inset-0 rounded-lg bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+        <Play className="w-3.5 h-3.5 text-white fill-white" />
+      </div>
+    </div>
+    <div className="flex-1 min-w-0">
+      <p className="text-[13px] font-medium text-zinc-200 group-hover:text-white truncate transition-colors">
+        {result.title}
+      </p>
+      <p className="text-[10.5px] text-zinc-600">From YouTube</p>
+    </div>
+    <ExternalLink className="w-3.5 h-3.5 text-zinc-700 flex-shrink-0" />
+  </motion.div>
+);
+
+
 // ── Genre Card ─────────────────────────────────────────────
 const GenreCard = ({
   genre, count, index, onClick,
@@ -173,12 +209,19 @@ export default function SearchPage() {
   const { counts: genreCounts } = useGenreCounts();
   const { play, setCategoryPool } = usePlayerStore();
   const { addRecent }        = useRecentlyPlayed();
+  const user                 = useAuthStore(s => s.user);
 
   const [query,      setQuery     ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [selGenres,  setSelGenres ] = useState<string[]>([]);
   const [sortBy,     setSortBy    ] = useState<'relevance' | 'likes' | 'recent'>('relevance');
   const [showFilter, setShowFilter] = useState(false);
+
+  // ── Live YouTube fallback — only fires when the user explicitly asks,
+  // never automatically, so it doesn't burn search quota on every keystroke.
+  const [liveResults, setLiveResults] = useState<LiveResult[]>([]);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError,   setLiveError  ] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -188,10 +231,70 @@ export default function SearchPage() {
     return () => clearTimeout(t);
   }, [query]);
 
+  // Query changed — any live results we were showing belong to the old query.
+  useEffect(() => {
+    setLiveResults([]);
+    setLiveError('');
+  }, [debouncedQ]);
+
   const handlePlay = (song: Song, pool: Song[]) => {
     play(song, pool);
     setCategoryPool(pool);
     addRecent(song);
+  };
+
+  const searchYouTubeLive = async () => {
+    const q = debouncedQ.trim();
+    if (!q || liveLoading) return;
+    setLiveLoading(true);
+    setLiveError('');
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`/api/search-youtube?q=${encodeURIComponent(q)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Search failed (${res.status})`);
+      const data = await res.json();
+      setLiveResults(data.results ?? []);
+    } catch {
+      setLiveError('Could not reach YouTube. Try again.');
+    } finally {
+      setLiveLoading(false);
+    }
+  };
+
+  const handlePlayLive = (r: LiveResult) => {
+    const liveSong: Song = {
+      id:          r.videoId,
+      title:       r.title,
+      youtubeUrl:  r.youtubeUrl,
+      videoId:     r.videoId,
+      thumbnail:   r.thumbnail,
+      addedBy:     user?.id ?? 'unknown',
+      addedByName: user?.name ?? 'You',
+      likeCount:   0,
+      tags:        [],
+      duration:    r.duration,
+      createdAt:   null,
+    };
+    play(liveSong, [liveSong]);
+    setCategoryPool([liveSong]);
+    addRecent(liveSong);
+
+    // Quietly persist it so next time it's already in the library.
+    if (user) {
+      void addSongIfNew({
+        title:       liveSong.title,
+        youtubeUrl:  liveSong.youtubeUrl,
+        videoId:     liveSong.videoId,
+        thumbnail:   liveSong.thumbnail,
+        addedBy:     user.id,
+        addedByName: user.name,
+        addedByPhoto: user.photoURL,
+        tags:        [],
+        duration:    liveSong.duration,
+      });
+    }
   };
 
   const toggleGenre = (id: string) =>
@@ -368,20 +471,47 @@ export default function SearchPage() {
         </div>
 
       ) : results.length === 0 ? (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-          className="flex flex-col items-center py-20 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-white/4 border border-dashed border-white/8 flex items-center justify-center mb-3">
-            <Search className="w-5 h-5 text-zinc-700" />
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <div className="flex flex-col items-center py-14 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-white/4 border border-dashed border-white/8 flex items-center justify-center mb-3">
+              <Search className="w-5 h-5 text-zinc-700" />
+            </div>
+            <p className="text-[13px] font-medium text-zinc-500">No results found</p>
+            <p className="text-[12px] text-zinc-700 mt-1">Try different keywords or filters</p>
+            {hasFilter && (
+              <button
+                onClick={() => { setSelGenres([]); setSortBy('relevance'); }}
+                className="mt-3 text-[12px] text-violet-400 hover:text-violet-300 transition-colors"
+              >
+                Clear filters
+              </button>
+            )}
+
+            {debouncedQ && liveResults.length === 0 && (
+              <button
+                onClick={() => void searchYouTubeLive()}
+                disabled={liveLoading}
+                className="mt-5 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-[12.5px] font-medium text-zinc-300 hover:text-white hover:bg-white/8 transition-all disabled:opacity-60"
+              >
+                {liveLoading
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching YouTube...</>
+                  : <><ExternalLink className="w-3.5 h-3.5" /> Search YouTube directly</>}
+              </button>
+            )}
+            {liveError && <p className="text-[12px] text-red-400 mt-3">{liveError}</p>}
           </div>
-          <p className="text-[13px] font-medium text-zinc-500">No results found</p>
-          <p className="text-[12px] text-zinc-700 mt-1">Try different keywords or filters</p>
-          {hasFilter && (
-            <button
-              onClick={() => { setSelGenres([]); setSortBy('relevance'); }}
-              className="mt-3 text-[12px] text-violet-400 hover:text-violet-300 transition-colors"
-            >
-              Clear filters
-            </button>
+
+          {liveResults.length > 0 && (
+            <div>
+              <p className="text-[12px] text-zinc-600 mb-3">
+                {liveResults.length} result{liveResults.length !== 1 ? 's' : ''} from YouTube — not in your library yet
+              </p>
+              <div className="space-y-0.5">
+                {liveResults.map(r => (
+                  <LiveResultRow key={r.videoId} result={r} onPlay={handlePlayLive} />
+                ))}
+              </div>
+            </div>
           )}
         </motion.div>
 

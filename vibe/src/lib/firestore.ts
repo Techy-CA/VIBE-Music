@@ -21,6 +21,19 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
 export const addSong = (data: Omit<Song, 'id' | 'createdAt' | 'likeCount'>) =>
   addDoc(collection(db, 'songs'), { ...data, likeCount: 0, createdAt: serverTimestamp() });
 
+// Used when a user plays a song found via live YouTube search — quietly
+// persists it so the next person who searches for it finds it in the
+// library instead of spending another live YouTube API call.
+export const addSongIfNew = async (data: Omit<Song, 'id' | 'createdAt' | 'likeCount'>): Promise<void> => {
+  try {
+    const existing = await getDocs(query(collection(db, 'songs'), where('videoId', '==', data.videoId)));
+    if (!existing.empty) return;
+    await addSong(data);
+  } catch (err) {
+    console.warn('[addSongIfNew]', err);
+  }
+};
+
 export const getSongsPage = async (lastDoc?: QueryDocumentSnapshot, pageSize = 12) => {
   const constraints = lastDoc
     ? [orderBy('createdAt', 'desc'), startAfter(lastDoc), limit(pageSize)]
